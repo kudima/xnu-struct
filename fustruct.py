@@ -284,17 +284,40 @@ class TypedefVisitor(Visitor):
 
             params = ', '.join(params)
             walker.write("typedef %s (*%s)(%s);\n" % (ret_type, name, params))
+
+        elif node.type.get_canonical().kind == TypeKind.CONSTANTARRAY:
+
+            print(node.type)
+            size = node.type.get_canonical().get_array_size()
+
+            _type = None
+            for x in node.get_children():
+                if x.kind == CursorKind.TYPE_REF:
+                    _type = x.spelling
+
+            if not _type:
+                _type = node.type.get_canonical().element_type.spelling
+            else:
+                if node.type.get_canonical().element_type.kind == TypeKind.POINTER:
+                    print(node.type.get_canonical().element_type.get_pointee().spelling)
+                    _type += ' *'
+
+            walker.write("typedef %s %s[%u]\n" % (_type, name, size))
+
         else:
             # no ref, must be primitive
             _type = None
             for x in node.get_children():
-                _type = x.spelling
+                if x.kind == CursorKind.TYPE_REF:
+                    _type = x.spelling
 
             if not _type:
+                # primitive is going to be resolved and
+                # spelled fully, so no need for a star in pointers
                 _type = node.type.get_canonical().spelling
-
-            if node.type.get_canonical().kind == TypeKind.POINTER:
-                _type += '*'
+            else:
+                if node.type.get_canonical().kind == TypeKind.POINTER:
+                    _type += ' *'
 
             code = "typedef %s %s" % (_type, name)
             align = node.type.get_align()
@@ -381,7 +404,7 @@ field_visitor = FieldVisitor()
 #clang.cindex.Cursor_visit(tu.cursor, 
 #        clang.cindex.Cursor_visit_callback(struct_visitor.visit), None)
 
-walker = TreeWalker()
+walker = TreeWalker(True)
 walker.set_visitor(CursorKind.FIELD_DECL, field_visitor)
 walker.set_visitor(CursorKind.STRUCT_DECL, struct_visitor)
 walker.set_visitor(CursorKind.TYPEDEF_DECL, typedef_visitor)
