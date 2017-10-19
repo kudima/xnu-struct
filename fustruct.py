@@ -15,19 +15,21 @@ def visit_node(node):
 
 class TreeWalker(object):
 
-    def __init__(self):
+    def __init__(self, debug=False):
         self.handlers = {}
         self.depth = -1 
         self.file_h = ""
         self.stack = []
+        self.debug = debug
 
     def set_visitor(self, kind, handler):
         self.handlers[kind] = handler
 
     def walk_tree(self, node):
 
-        self.log("%s : %s"  % (node.kind, node.spelling))
-        self.log("invalid " + "%s" % node.kind.is_invalid())
+        if self.debug:
+            self.log("%s : %s"  % (node.kind, node.spelling))
+            self.log("invalid " + "%s" % node.kind.is_invalid())
         #if node.referenced:
         #    self.log("ref " + "%s" % node.referenced.spelling)
         #self.log("attr " + "%s" % node.kind.is_attribute())
@@ -260,6 +262,8 @@ class TypedefVisitor(Visitor):
                         walker.visit(x) 
                         walker.write(" %s;\n" % name)
                         return STOP
+                    else:
+                        walker.write("%s %s;\n" % (_type, name))
                 else:
                     raise Exception("Typedef has more then one rec")
 
@@ -282,8 +286,6 @@ class TypedefVisitor(Visitor):
             walker.write("typedef %s (*%s)(%s);\n" % (ret_type, name, params))
         else:
             # no ref, must be primitive
-            print("AAAAA")
-            print(node.type.get_canonical().kind)
             _type = None
             for x in node.get_children():
                 _type = x.spelling
@@ -387,7 +389,6 @@ walker.set_visitor(CursorKind.UNION_DECL, UnionVisitor())
 walker.set_visitor(CursorKind.ENUM_DECL, EnumVisitor())
 walker.visit(tu.cursor)
 
-print "------------ CODE ------------"
 print walker.file_h
 
 
