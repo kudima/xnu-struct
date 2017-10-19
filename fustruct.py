@@ -100,7 +100,16 @@ class FieldVisitor(Visitor):
         kind = node.type.get_canonical().kind
 
         if  kind != TypeKind.RECORD:
-            if kind != TypeKind.CONSTANTARRAY:
+
+            if kind == TypeKind.CONSTANTARRAY:
+                # XXX
+                _type = node.type.element_type.spelling
+                size = node.type.get_array_size()
+                walker.write("%s %s[%u];\n" % (_type, name, size))
+            if kind == TypeKind.INCOMPLETEARRAY:
+                _type = node.type.element_type.spelling
+                walker.write("%s %s[];\n" % (_type, name))
+            else: 
                 _type = node.type.spelling
 
                 code = "%s %s" % (_type, name)
@@ -108,12 +117,6 @@ class FieldVisitor(Visitor):
                     code += ":%u" % node.get_bitfield_width()
                 code += ";\n"
                 walker.write(code)
-
-            else:
-                # XXX
-                _type = node.type.element_type.spelling
-                size = node.type.get_array_size()
-                walker.write("%s %s[%u];\n" % (_type, name, size))
                 
         else:
             # in case we have nested struct definitions,
@@ -413,7 +416,7 @@ field_visitor = FieldVisitor()
 #clang.cindex.Cursor_visit(tu.cursor, 
 #        clang.cindex.Cursor_visit_callback(struct_visitor.visit), None)
 
-walker = TreeWalker(False)
+walker = TreeWalker(True)
 walker.set_visitor(CursorKind.FIELD_DECL, field_visitor)
 walker.set_visitor(CursorKind.STRUCT_DECL, struct_visitor)
 walker.set_visitor(CursorKind.TYPEDEF_DECL, typedef_visitor)
