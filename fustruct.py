@@ -346,6 +346,25 @@ class UnionVisitor(Visitor):
 
         return STOP
 
+class EnumVisitor(Visitor):
+
+    def __init__(self):
+        super(self.__class__, self).__init__()
+
+    def visit(self, node, walker):
+
+        walker.write("enum " + node.spelling + " {\n")
+
+        # XXX: this does not expose the internals of the enumertion
+        # and does not quite allow to gen nice indentions ...
+        for x in node.get_children():
+            tokens = map(lambda t: t.spelling, x.get_tokens())
+            walker.write(' '.join(tokens) + ',\n')
+
+        walker.write("};\n");
+        
+        return STOP
+
 clang.cindex.Config.set_library_path("/Library/Developer/CommandLineTools/usr/lib")
 
 index = clang.cindex.Index.create()
@@ -365,6 +384,7 @@ walker.set_visitor(CursorKind.FIELD_DECL, field_visitor)
 walker.set_visitor(CursorKind.STRUCT_DECL, struct_visitor)
 walker.set_visitor(CursorKind.TYPEDEF_DECL, typedef_visitor)
 walker.set_visitor(CursorKind.UNION_DECL, UnionVisitor())
+walker.set_visitor(CursorKind.ENUM_DECL, EnumVisitor())
 walker.visit(tu.cursor)
 
 print "------------ CODE ------------"
