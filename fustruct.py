@@ -287,7 +287,6 @@ class TypedefVisitor(Visitor):
 
         elif node.type.get_canonical().kind == TypeKind.CONSTANTARRAY:
 
-            print(node.type)
             size = node.type.get_canonical().get_array_size()
 
             _type = None
@@ -298,11 +297,21 @@ class TypedefVisitor(Visitor):
             if not _type:
                 _type = node.type.get_canonical().element_type.spelling
             else:
-                if node.type.get_canonical().element_type.kind == TypeKind.POINTER:
-                    print(node.type.get_canonical().element_type.get_pointee().spelling)
-                    _type += ' *'
+                # XXX: there is probably a way to sort out the pointers
+                # via TYPE_REF or something, but for know we just resolv
+                # the type to the primitive and add those nested pointers
+                # since I did not want to spend any more time on this ...
+                elem_type = node.type.get_canonical().element_type
+                type_string = ''
 
-            walker.write("typedef %s %s[%u]\n" % (_type, name, size))
+                while elem_type.kind == TypeKind.POINTER and elem_type.get_pointee():
+                    elem_type = elem_type.get_pointee()
+                    type_string += ' *'
+
+                if len(type_string) > 0:
+                    _type = elem_type.spelling + type_string
+
+            walker.write("typedef %s %s[%u];\n" % (_type, name, size))
 
         else:
             # no ref, must be primitive
@@ -404,7 +413,7 @@ field_visitor = FieldVisitor()
 #clang.cindex.Cursor_visit(tu.cursor, 
 #        clang.cindex.Cursor_visit_callback(struct_visitor.visit), None)
 
-walker = TreeWalker(True)
+walker = TreeWalker(False)
 walker.set_visitor(CursorKind.FIELD_DECL, field_visitor)
 walker.set_visitor(CursorKind.STRUCT_DECL, struct_visitor)
 walker.set_visitor(CursorKind.TYPEDEF_DECL, typedef_visitor)
