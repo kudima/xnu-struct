@@ -103,11 +103,11 @@ class FieldVisitor(Visitor):
 
             if kind == TypeKind.CONSTANTARRAY:
                 # XXX
-                _type = node.type.element_type.spelling
-                size = node.type.get_array_size()
+                _type = node.type.get_canonical().get_array_element_type().spelling
+                size = node.type.get_canonical().get_array_size()
                 walker.write("%s %s[%u];\n" % (_type, name, size))
-            if kind == TypeKind.INCOMPLETEARRAY:
-                _type = node.type.element_type.spelling
+            elif kind == TypeKind.INCOMPLETEARRAY:
+                _type = node.type.get_canonical().element_type.spelling
                 walker.write("%s %s[];\n" % (_type, name))
             else: 
                 _type = node.type.spelling
@@ -154,6 +154,7 @@ class StructVisitor(Visitor):
 
     def visit(self, node, walker):
 
+        self.has_children = False
         force = False
         if hasattr(node, 'force'):
             force = node.force
@@ -163,7 +164,6 @@ class StructVisitor(Visitor):
 
         for c in node.get_children():
             self.has_children = True
-            break
 
         if force:
             walker.write("struct %s {\n" % node.spelling)
@@ -182,7 +182,7 @@ class StructVisitor(Visitor):
                 walker.write("}");
         else:
             walker.write_raw(";\n");
-        
+
         return STOP
 
     def visit_field(self, node):
@@ -316,6 +316,9 @@ class TypedefVisitor(Visitor):
 
             walker.write("typedef %s %s[%u];\n" % (_type, name, size))
 
+        elif node.type.get_canonical().kind == TypeKind.INCOMPLETEARRAY:
+                _type = node.type.get_canonical().element_type.spelling
+                walker.write("typedef %s %s[];\n" % (_type, name))
         else:
             # no ref, must be primitive
             _type = None
@@ -416,7 +419,7 @@ field_visitor = FieldVisitor()
 #clang.cindex.Cursor_visit(tu.cursor, 
 #        clang.cindex.Cursor_visit_callback(struct_visitor.visit), None)
 
-walker = TreeWalker(True)
+walker = TreeWalker(False)
 walker.set_visitor(CursorKind.FIELD_DECL, field_visitor)
 walker.set_visitor(CursorKind.STRUCT_DECL, struct_visitor)
 walker.set_visitor(CursorKind.TYPEDEF_DECL, typedef_visitor)
