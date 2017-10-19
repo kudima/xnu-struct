@@ -103,10 +103,19 @@ class FieldVisitor(Visitor):
 
             if kind == TypeKind.CONSTANTARRAY:
                 # XXX
-                _type = node.type.get_canonical().get_array_element_type().spelling
+                if node.type.kind ==  TypeKind.CONSTANTARRAY:
+                    _type = node.type.get_array_element_type().spelling
+                else:
+                    _type = node.type.get_canonical().get_array_element_type().spelling
+
                 size = node.type.get_canonical().get_array_size()
                 walker.write("%s %s[%u];\n" % (_type, name, size))
             elif kind == TypeKind.INCOMPLETEARRAY:
+                if node.type.kind ==  TypeKind.INCOMPLETEARRAY:
+                    _type = node.type.get_array_element_type().spelling
+                else:
+                    _type = node.type.get_canonical().get_array_element_type().spelling
+
                 _type = node.type.get_canonical().element_type.spelling
                 walker.write("%s %s[];\n" % (_type, name))
             else: 
@@ -253,8 +262,9 @@ class TypedefVisitor(Visitor):
         name = node.spelling
         _type = None
 
+        kind = node.type.get_canonical().kind
 
-        if node.type.get_canonical().kind == TypeKind.RECORD:
+        if kind == TypeKind.RECORD:
             walker.write("typedef \n")
             for x in node.get_children():
                 if not _type:
@@ -269,6 +279,24 @@ class TypedefVisitor(Visitor):
                         walker.write("%s %s;\n" % (_type, name))
                 else:
                     raise Exception("Typedef has more then one rec")
+
+        elif kind == TypeKind.ENUM:
+            walker.write("typedef \n")
+
+            for x in node.get_children():
+                if x.kind == CursorKind.ENUM_DECL:
+                    _type = x.spelling
+
+                    if len(_type) == 0:
+                        x.force = True
+                        walker.visit(x)
+                        walker.write(" %s;\n" % name)
+                        return STOP
+                    else:
+                        walker.write("enum %s %s;\n" % (_type, name))
+
+                elif x.kind == CursorKind.TYPE_REF:
+                    walker.write("enum %s %s;\n" % (x.spelling, name))
 
         elif node.type.get_canonical().kind == TypeKind.POINTER and \
                     self.__match_func_ptr(node.get_tokens()):
@@ -393,16 +421,31 @@ class EnumVisitor(Visitor):
 
     def visit(self, node, walker):
 
+        has_children = False
+        force = False
+        if hasattr(node, 'force'):
+            force = node.force
+
+        if len(node.spelling) == 0 and not force:
+            return STOP
+
         walker.write("enum " + node.spelling + " {\n")
 
         # XXX: this does not expose the internals of the enumertion
         # and does not quite allow to gen nice indentions ...
         for x in node.get_children():
+            has_children = True
             tokens = map(lambda t: t.spelling, x.get_tokens())
             walker.write(' '.join(tokens) + ',\n')
 
-        walker.write("};\n");
-        
+        if has_children:
+            if len(node.spelling) > 0:
+                walker.write("};\n");
+            else:
+                walker.write("}");
+        else:
+            walker.write_raw(";\n");
+
         return STOP
 
 clang.cindex.Config.set_library_path("/Library/Developer/CommandLineTools/usr/lib")
