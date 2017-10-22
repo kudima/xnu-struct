@@ -7,6 +7,63 @@ from clang.cindex import TokenKind
 CONT = 1
 STOP = 2
 
+'''
+XXX:
+Refactor handling of function pointers. (now it is just copy/paste)
+Get rid of long attribute access node.get_canonical().type.kind.
+'''
+
+def match_func_ptr(tokens):
+    '''
+    XXX: there should be a better way
+    we search for pattern (...)(...) in typedef,
+    if it has it then we conclude that this is 
+    a function pointer typedef
+    '''
+
+    stack = []
+    count = 0
+
+    for t in tokens:
+        if t.kind == TokenKind.PUNCTUATION:
+            if t.spelling == '(':
+                stack.append('(')
+            elif t.spelling == ')':
+                prev = stack.pop()
+                if prev != '(':
+                    return False
+
+                if len(stack) == 0:
+                    count += 1
+
+                if count > 2:
+                    return False
+
+    return (count == 2)
+
+
+def get_func_ptr_primitiv_ret(tokens):
+    '''
+    XXX: there should be a better way
+
+    We parse the tokens to get the return type for
+    a function pointer since for some reason it does
+    not appear in children
+    '''
+
+    result = ""
+    for t in tokens:
+
+        if t.spelling == 'typedef':
+            continue
+
+        if t.spelling != '(':
+            result += t.spelling + " "
+        else:
+            break
+
+    return result
+
 def visit_node(node):
 
     for c in node.get_children():
@@ -21,6 +78,50 @@ class TreeWalker(object):
         self.file_h = ""
         self.stack = []
         self.debug = debug
+        # XXX: could not find a better way to handle typdefed enums
+        # it seems that we should be able to use underlying_typedef_type
+        # on children (judging by clang ast output), but children in python
+        # have type ENUM_DECL instead of ENUM_CONSTANT_DECL, may be 
+        # there is something wrong with python bindings.
+
+        # a list of nodes we saw no as part of an enum
+        self.anon_enums = []
+        # a list of constants declared via enum and typedef
+        self.enum_consts = []
+
+    def add_anon_enum(self, node):
+        self.anon_enums.append(node)
+
+    def add_anon_enum_const(self, node):
+        self.enum_consts.append(node)
+
+    def gen_anon_enums(self):
+        '''
+        Generates code for anonymous enum constants which 
+        were not afterwards declared via typedef.
+
+        XXX: After some trials it turned out that if we have a constant
+        in anon enum defined out of typedef it does not appear in any
+        other typedefed anonymous enum in case of redefinition.
+        '''
+
+        for node in self.anon_enums:
+
+            code = 'enum {\n'
+            defined = 0
+
+            for x in node.get_children():
+
+                if x.spelling in self.enum_consts:
+                    break
+
+                defined += 1
+                tokens = map(lambda t: t.spelling, x.get_tokens())
+                code += ' '.join(tokens) + ',\n'
+            
+            if defined > 0:
+                code += '};\n'
+                self.file_h = code + self.file_h
 
     def set_visitor(self, kind, handler):
         self.handlers[kind] = handler
@@ -29,7 +130,8 @@ class TreeWalker(object):
 
         if self.debug:
             self.log("%s : %s"  % (node.kind, node.spelling))
-            self.log("invalid " + "%s" % node.kind.is_invalid())
+            #self.log("invalid " + "%s" % node.kind.is_invalid())
+            self.log("type " + "%s" % node.type.kind)
         #if node.referenced:
         #    self.log("ref " + "%s" % node.referenced.spelling)
         #self.log("attr " + "%s" % node.kind.is_attribute())
@@ -100,6 +202,8 @@ class FieldVisitor(Visitor):
         kind = node.type.get_canonical().kind
 
         if  kind != TypeKind.RECORD:
+            
+            code = ''
 
             if kind == TypeKind.CONSTANTARRAY:
                 # XXX
@@ -109,23 +213,47 @@ class FieldVisitor(Visitor):
                     _type = node.type.get_canonical().get_array_element_type().spelling
 
                 size = node.type.get_canonical().get_array_size()
-                walker.write("%s %s[%u];\n" % (_type, name, size))
+                code = "%s %s[%u];" % (_type, name, size)
+
             elif kind == TypeKind.INCOMPLETEARRAY:
+
                 if node.type.kind ==  TypeKind.INCOMPLETEARRAY:
                     _type = node.type.get_array_element_type().spelling
                 else:
                     _type = node.type.get_canonical().get_array_element_type().spelling
 
                 _type = node.type.get_canonical().element_type.spelling
-                walker.write("%s %s[];\n" % (_type, name))
+                code = "%s %s[];" % (_type, name)
+
+            elif kind == TypeKind.POINTER and \
+                    match_func_ptr(node.get_tokens()):
+
+                params = []
+                ret_type = None
+                for x in node.get_children():
+                    # return type, if not primitive
+                    if x.kind == CursorKind.TYPE_REF:
+                        ret_type = x.spelling
+                    else:
+                        params.append("%s %s" % (x.type.spelling, x.spelling))
+
+                if not ret_type:
+                    ret_type = get_func_ptr_primitiv_ret(node.get_tokens())
+
+                params = ', '.join(params)
+                code = "%s (*%s)(%s);" % (ret_type, name, params)
+
             else: 
                 _type = node.type.spelling
 
                 code = "%s %s" % (_type, name)
                 if node.is_bitfield():
                     code += ":%u" % node.get_bitfield_width()
-                code += ";\n"
-                walker.write(code)
+                #code += "; // %02X\n" % (node.get_field_offsetof()/8)
+                code += "; "
+
+            code += " //%02X\n" % (node.get_field_offsetof()/8)
+            walker.write(code)
                 
         else:
             # in case we have nested struct definitions,
@@ -151,19 +279,18 @@ class StructVisitor(Visitor):
         # as the result we generate a header with all the structures and 
         # typedef 
         self.struct_h = ""
-        self.has_children = False
         super(self.__class__, self).__init__()
 
-    def decl_struct_start(self, node, writer):
+    def decl_struct_start(self, node, writer, has_children):
 
-        if self.has_children:
+        if has_children:
             writer.write("struct %s {\n" % node.spelling)
         else:
             writer.write("struct %s" % node.spelling)
 
     def visit(self, node, walker):
 
-        self.has_children = False
+        has_children = False
         force = False
         if hasattr(node, 'force'):
             force = node.force
@@ -172,19 +299,19 @@ class StructVisitor(Visitor):
             return STOP
 
         for c in node.get_children():
-            self.has_children = True
+            has_children = True
 
         if force:
             walker.write("struct %s {\n" % node.spelling)
         else:
-            self.decl_struct_start(node, walker)
+            self.decl_struct_start(node, walker, has_children)
 
         walker.visit_children(node)
 
         # TODO: no children used to detect forward declarations
         # zero length spelling used to detect anonymous structs
         # Is there any better way?
-        if self.has_children:
+        if has_children:
             if len(node.spelling) > 0:
                 walker.write("};\n");
             else:
@@ -194,68 +321,12 @@ class StructVisitor(Visitor):
 
         return STOP
 
-    def visit_field(self, node):
-
-        self.log("in visit %s : %s"  % (node.kind, node.spelling))
-
-        if node.kind == CursorKind.FIELD_DECL:
-            for n in node.get_children():
-                self.log("in visit %s : %s"  % (n.kind, n.spelling))
-
 class TypedefVisitor(Visitor):
 
     def __init__(self):
         super(self.__class__, self).__init__()
 
-    def __match_func_ptr(self, tokens):
-        '''
-        XXX: there should be a better way
-        we search for pattern (...)(...) in typedef,
-        if it has it then we conclude that this is 
-        a function pointer typedef
-        '''
 
-        stack = []
-        count = 0
-
-        for t in tokens:
-            if t.kind == TokenKind.PUNCTUATION:
-                if t.spelling == '(':
-                    stack.append('(')
-                elif t.spelling == ')':
-                    prev = stack.pop()
-                    if prev != '(':
-                        return False
-
-                    if len(stack) == 0:
-                        count += 1
-
-                    if count > 2:
-                        return False
-
-        return (count == 2)
-
-    def __get_func_ptr_primitiv_ret(self, tokens):
-        '''
-        XXX: there should be a better way
-
-        We parse the tokens to get the return type for
-        a function pointer since for some reason it does
-        not appear in children
-        '''
-
-        result = ""
-        for t in tokens:
-
-            if t.spelling == 'typedef':
-                continue
-
-            if t.spelling != '(':
-                result += t.spelling + " "
-            else:
-                break
-
-        return result
 
     def visit(self, node, walker):
 
@@ -299,7 +370,7 @@ class TypedefVisitor(Visitor):
                     walker.write("enum %s %s;\n" % (x.spelling, name))
 
         elif node.type.get_canonical().kind == TypeKind.POINTER and \
-                    self.__match_func_ptr(node.get_tokens()):
+                    match_func_ptr(node.get_tokens()):
 
             params = []
             ret_type = None
@@ -311,7 +382,7 @@ class TypedefVisitor(Visitor):
                     params.append("%s %s" % (x.type.spelling, x.spelling))
 
             if not ret_type:
-                ret_type = self.__get_func_ptr_primitiv_ret(node.get_tokens())
+                ret_type = get_func_ptr_primitiv_ret(node.get_tokens())
 
             params = ', '.join(params)
             walker.write("typedef %s (*%s)(%s);\n" % (ret_type, name, params))
@@ -423,10 +494,20 @@ class EnumVisitor(Visitor):
 
         has_children = False
         force = False
+
         if hasattr(node, 'force'):
             force = node.force
 
+        # XXX: How to tell the difference between anon enum
+        # declaration enum {a=1}; 
+        #  and
+        # typedef enum {b=1} enm_t?
+        # For now just store all the not forced once in a list
+        # and at the end check if the named 
+        # constants from enum where declared or not via typedef
+
         if len(node.spelling) == 0 and not force:
+            walker.add_anon_enum(node)
             return STOP
 
         walker.write("enum " + node.spelling + " {\n")
@@ -435,6 +516,7 @@ class EnumVisitor(Visitor):
         # and does not quite allow to gen nice indentions ...
         for x in node.get_children():
             has_children = True
+            walker.add_anon_enum_const(x.spelling)
             tokens = map(lambda t: t.spelling, x.get_tokens())
             walker.write(' '.join(tokens) + ',\n')
 
@@ -442,11 +524,24 @@ class EnumVisitor(Visitor):
             if len(node.spelling) > 0:
                 walker.write("};\n");
             else:
-                walker.write("}");
+                walker.write("}\n");
         else:
             walker.write_raw(";\n");
 
         return STOP
+
+# we just need this to skip visiting
+# struct/classes declarations referenced 
+# from variable declarations 
+class VarVisitor(Visitor):
+
+    def __init__(self):
+        super(self.__class__, self).__init__()
+
+    def visit(self, node, walker):
+        return STOP
+
+
 
 clang.cindex.Config.set_library_path("/Library/Developer/CommandLineTools/usr/lib")
 
@@ -462,13 +557,16 @@ field_visitor = FieldVisitor()
 #clang.cindex.Cursor_visit(tu.cursor, 
 #        clang.cindex.Cursor_visit_callback(struct_visitor.visit), None)
 
+#walker = TreeWalker(True)
 walker = TreeWalker(False)
 walker.set_visitor(CursorKind.FIELD_DECL, field_visitor)
 walker.set_visitor(CursorKind.STRUCT_DECL, struct_visitor)
 walker.set_visitor(CursorKind.TYPEDEF_DECL, typedef_visitor)
 walker.set_visitor(CursorKind.UNION_DECL, UnionVisitor())
 walker.set_visitor(CursorKind.ENUM_DECL, EnumVisitor())
+walker.set_visitor(CursorKind.VAR_DECL, VarVisitor())
 walker.visit(tu.cursor)
+walker.gen_anon_enums()
 
 print walker.file_h
 
