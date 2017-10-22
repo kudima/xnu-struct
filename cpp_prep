@@ -1,0 +1,13 @@
+#!/bin/sh
+# proprocesses a C file and dump the resulting C code
+SDK_PATH=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
+XNU_PATH=/Users/macbook01/src/xnu-master/
+OSFMK=$XNU_PATH/osfmk
+BSD=$XNU_PATH/bsd
+#some file include stuff from osfmk but have System/ prefix, so we create a soft link System to osfmk in XNU_PATH to accomodate that
+SYSTEM=$XNU_PATH
+LIBKERN=$XNU_PATH/libkern
+
+# PRIVATE needed so private kernel declaration are not defed out
+clang -E -D PRIVATE -I$OSFMK -I$SDK_PATH -I$BSD -I$SYSTEM -I$LIBKERN $1 | grep -Ev "^\#"
+#clang -E -D PRIVATE -I$OSFMK -I$SDK_PATH -I$BSD -I$SYSTEM -I$LIBKERN $1 
